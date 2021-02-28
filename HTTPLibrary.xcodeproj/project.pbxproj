@@ -13,6 +13,7 @@
 		15893E2325E716C600E5DFCF /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 15893E2125E716C600E5DFCF /* Main.storyboard */; };
 		15893E2525E716C800E5DFCF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 15893E2425E716C800E5DFCF /* Assets.xcassets */; };
 		15893E2825E716C800E5DFCF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 15893E2625E716C800E5DFCF /* LaunchScreen.storyboard */; };
+		15893E3125E7170B00E5DFCF /* HTTPLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15893E3025E7170B00E5DFCF /* HTTPLibrary.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		15893E2425E716C800E5DFCF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		15893E2725E716C800E5DFCF /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		15893E2925E716C800E5DFCF /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		15893E3025E7170B00E5DFCF /* HTTPLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPLibrary.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -63,6 +65,7 @@
 				15893E2425E716C800E5DFCF /* Assets.xcassets */,
 				15893E2625E716C800E5DFCF /* LaunchScreen.storyboard */,
 				15893E2925E716C800E5DFCF /* Info.plist */,
+				15893E3025E7170B00E5DFCF /* HTTPLibrary.swift */,
 			);
 			path = HTTPLibrary;
 			sourceTree = "<group>";
@@ -138,6 +141,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				15893E2025E716C600E5DFCF /* ViewController.swift in Sources */,
+				15893E3125E7170B00E5DFCF /* HTTPLibrary.swift in Sources */,
 				15893E1C25E716C600E5DFCF /* AppDelegate.swift in Sources */,
 				15893E1E25E716C600E5DFCF /* SceneDelegate.swift in Sources */,
 			);
