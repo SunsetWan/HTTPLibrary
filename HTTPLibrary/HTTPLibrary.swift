@@ -155,7 +155,7 @@ public extension HTTPRequest {
 
 public struct HTTPResponse {
     public let request: HTTPRequest
-    private let response: HTTPURLResponse
+    public let response: HTTPURLResponse
     public let body: Data?
 
     public var status: HTTPStatus {
@@ -196,6 +196,7 @@ public struct HTTPError: Error {
         //...                     // other scenarios we may wish to expose; fill them in as necessary
         case unknown            // we have no idea what the problem is
         case wrongUrl
+        case bodyEncodeError
     }
 }
 
@@ -228,8 +229,88 @@ extension URLSession: HTTPLoading {
             completion(.failure(error))
             return
         }
+
+        // construct the URLRequest
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = request.method.rawValue
+
+        // copy over any custom HTTP headers
+        for (header, value) in request.headers {
+            urlRequest.addValue(value, forHTTPHeaderField: header)
+        }
+
+        if request.body.isEmpty == false {
+            // if our body defines additional headers, add them
+            for (header, value) in request.body.additionalHeaders {
+                urlRequest.addValue(value, forHTTPHeaderField: header)
+            }
+
+            // attempt to retrieve the body data
+            do {
+                urlRequest.httpBody = try request.body.encode()
+            } catch {
+                // something went wrong creating the body; stop and report back
+                let error = HTTPError(code: .wrongUrl, request: request, response: nil, underlyingError: nil)
+                completion(.failure(error))
+                return
+            }
+        }
+
+        let dataTask = self.dataTask(with: urlRequest) { (data, response, error) in
+            // construct a Result<HTTPResponse, HTTPError> out of the triplet of data, url response, and url error
+            var httpResponse: HTTPResponse?
+//            var httpResult: HTTPResult?
+            if let r = response as? HTTPURLResponse {
+                httpResponse = HTTPResponse(request: request, response: r, body: data)
+            }
+
+            if let e = error as? URLError {
+                let code: HTTPError.Code
+                switch e.code {
+                case .badURL:
+                    code = .invalidRequest
+//                case .unsupportedURL
+                default:
+                    code = .unknown
+                }
+
+                let httpResult: HTTPResult = .failure(HTTPError(code: code, request: request, response: httpResponse, underlyingError: e))
+                completion(httpResult)
+            } else if let someError = error {
+                // an error, but not a URL error
+                let httpResult: HTTPResult = .failure(HTTPError(code: .unknown, request: request, response: httpResponse, underlyingError: someError))
+                completion(httpResult)
+            } else if let r = httpResponse {
+                // not an error, and an HTTPURLResponse
+                let httpResult: HTTPResult = .success(r)
+                completion(httpResult)
+            } else {
+                // not an error, but also not an HTTPURLResponse
+                let httpResult: HTTPResult = .failure(HTTPError(code: .invalidResponse, request: request, response: nil, underlyingError: error))
+                completion(httpResult)
+            }
+        }
+
+        // off we go!
+        dataTask.resume()
     }
 }
+
+public class StarWarsAPI {
+    private let loader: HTTPLoading = URLSession.shared
+
+    public func requestPeople(completion: @escaping (...) -> Void) {
+        var r = HTTPRequest()
+        r.host = "swapi.dev"
+        r.path = "/api/people"
+
+        loader.load(request: r) { result in
+            // TODO: interpret the result
+            completion(...)
+        }
+    }
+}
+
 
 
 
