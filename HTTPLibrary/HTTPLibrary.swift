@@ -216,104 +216,240 @@ extension HTTPResult {
     }
 }
 
+/// Even though this loader doesn’t execute the completion block itself, it still satisfies the all of the requirements of being an “HTTPLoading” type. This ability to have loaders to delegate loading responsibility to other loaders is the core of our framework’s functionality. It will allow us to compose a custom sequence of loaders to execute requests. We’ll formalize this notion of a “next loader” as part of our protocol:
+//public protocol HTTPLoading {
+////    var nextLoader: HTTPLoading? { get set }
+//    func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void)
+//}
 
-public protocol HTTPLoading {
-    func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void)
+open class HTTPLoader {
+
+    public var nextLoader: HTTPLoader? {
+        willSet {
+            guard nextLoader == nil else { fatalError("The nextLoader may only be set once") }
+        }
+    }
+
+
+
+    public init() { }
+
+    open func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+
+        if let next = nextLoader {
+            next.load(request: request, completion: completion)
+        } else {
+            let error = HTTPError(code: .cannotConnect, request: request, response: nil, underlyingError: nil)
+            completion(.failure(error))
+        }
+
+    }
 }
 
-extension URLSession: HTTPLoading {
-    public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
-        guard let url = request.url else {
-            // we couldn't construct a proper URL out of the request's URLComponents
-            let error = HTTPError(code: .wrongUrl, request: request, response: nil, underlyingError: nil)
-            completion(.failure(error))
-            return
-        }
+public class PrintLoader: HTTPLoader {
+    public override func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        print("Loading \(request)")
+        super.load(request: request, completion: { result in
+            print("Got result: \(result)")
+            completion(result)
+        })
+    }
 
-        // construct the URLRequest
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = request.method.rawValue
+}
 
-        // copy over any custom HTTP headers
-        for (header, value) in request.headers {
-            urlRequest.addValue(value, forHTTPHeaderField: header)
-        }
+public class ModifyRequest: HTTPLoader {
 
-        if request.body.isEmpty == false {
-            // if our body defines additional headers, add them
-            for (header, value) in request.body.additionalHeaders {
-                urlRequest.addValue(value, forHTTPHeaderField: header)
-            }
+    private let modifier: (HTTPRequest) -> HTTPRequest
 
-            // attempt to retrieve the body data
-            do {
-                urlRequest.httpBody = try request.body.encode()
-            } catch {
-                // something went wrong creating the body; stop and report back
-                let error = HTTPError(code: .wrongUrl, request: request, response: nil, underlyingError: nil)
-                completion(.failure(error))
-                return
-            }
-        }
+    public init(modifier: @escaping (HTTPRequest) -> HTTPRequest) {
+        self.modifier = modifier
+        super.init()
+    }
 
-        let dataTask = self.dataTask(with: urlRequest) { (data, response, error) in
-            // construct a Result<HTTPResponse, HTTPError> out of the triplet of data, url response, and url error
-            var httpResponse: HTTPResponse?
-//            var httpResult: HTTPResult?
-            if let r = response as? HTTPURLResponse {
-                httpResponse = HTTPResponse(request: request, response: r, body: data)
-            }
-
-            if let e = error as? URLError {
-                let code: HTTPError.Code
-                switch e.code {
-                case .badURL:
-                    code = .invalidRequest
-//                case .unsupportedURL
-                default:
-                    code = .unknown
-                }
-
-                let httpResult: HTTPResult = .failure(HTTPError(code: code, request: request, response: httpResponse, underlyingError: e))
-                completion(httpResult)
-            } else if let someError = error {
-                // an error, but not a URL error
-                let httpResult: HTTPResult = .failure(HTTPError(code: .unknown, request: request, response: httpResponse, underlyingError: someError))
-                completion(httpResult)
-            } else if let r = httpResponse {
-                // not an error, and an HTTPURLResponse
-                let httpResult: HTTPResult = .success(r)
-                completion(httpResult)
-            } else {
-                // not an error, but also not an HTTPURLResponse
-                let httpResult: HTTPResult = .failure(HTTPError(code: .invalidResponse, request: request, response: nil, underlyingError: error))
-                completion(httpResult)
-            }
-        }
-
-        // off we go!
-        dataTask.resume()
+    override public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        let modifiedRequest = modifier(request)
+        super.load(request: modifiedRequest, completion: completion)
     }
 }
 
 public class StarWarsAPI {
-    private let loader: HTTPLoading = URLSession.shared
+    private let loader: HTTPLoader
 
-    public func requestPeople(completion: @escaping (...) -> Void) {
+    public init(loader: HTTPLoader = URLSessionLoader.shared) {
+
+        let modifier = ModifyRequest { request in
+            var copy = request
+            if let _ = copy.host?.isEmpty {
+                copy.host = "swapi.dev"
+            }
+            if copy.path.hasPrefix("/") == false {
+                copy.path = "/api/" + copy.path
+            }
+            return copy
+        }
+
+        let ret = modifier --> loader
+
+        self.loader = ret!
+    }
+
+    public func requestPeople(completion: @escaping (HTTPResult) -> Void) {
         var r = HTTPRequest()
-        r.host = "swapi.dev"
-        r.path = "/api/people"
+        r.path = "people"
+//        r.host = "swapi.dev"
+//        r.path = "/api/people"
 
         loader.load(request: r) { result in
             // TODO: interpret the result
-            completion(...)
+            completion(result)
         }
     }
 }
 
 
 
+public class URLSessionLoader: HTTPLoader {
+
+    public static let shared = URLSessionLoader(session: URLSession.shared)
+
+    let session: URLSession
+
+    init(session: URLSession) {
+        self.session = session
+    }
+
+    public override func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        print("URLSessionLoader Loading \(request)")
+        super.load(request: request, completion: { result in
+            print("Got result: \(result)")
+            completion(result)
+        })
+    }
+}
 
 
 
+//class AnyLoader: HTTPLoading {
+//
+//    private let loader: HTTPLoading
+//
+//    init(_ other: HTTPLoading) {
+//        self.loader = other
+//    }
+//
+//    func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+//        loader.load(request: request, completion: completion)
+//    }
+//
+//}
+
+
+//extension URLSession: HTTPLoading {
+//    public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+//        guard let url = request.url else {
+//            // we couldn't construct a proper URL out of the request's URLComponents
+//            let error = HTTPError(code: .wrongUrl, request: request, response: nil, underlyingError: nil)
+//            completion(.failure(error))
+//            return
+//        }
+//
+//        // construct the URLRequest
+//        var urlRequest = URLRequest(url: url)
+//        urlRequest.httpMethod = request.method.rawValue
+//
+//        // copy over any custom HTTP headers
+//        for (header, value) in request.headers {
+//            urlRequest.addValue(value, forHTTPHeaderField: header)
+//        }
+//
+//        if request.body.isEmpty == false {
+//            // if our body defines additional headers, add them
+//            for (header, value) in request.body.additionalHeaders {
+//                urlRequest.addValue(value, forHTTPHeaderField: header)
+//            }
+//
+//            // attempt to retrieve the body data
+//            do {
+//                urlRequest.httpBody = try request.body.encode()
+//            } catch {
+//                // something went wrong creating the body; stop and report back
+//                let error = HTTPError(code: .wrongUrl, request: request, response: nil, underlyingError: nil)
+//                completion(.failure(error))
+//                return
+//            }
+//        }
+//
+//        let dataTask = self.dataTask(with: urlRequest) { (data, response, error) in
+//            // construct a Result<HTTPResponse, HTTPError> out of the triplet of data, url response, and url error
+//            var httpResponse: HTTPResponse?
+////            var httpResult: HTTPResult?
+//            if let r = response as? HTTPURLResponse {
+//                httpResponse = HTTPResponse(request: request, response: r, body: data)
+//            }
+//
+//            if let e = error as? URLError {
+//                let code: HTTPError.Code
+//                switch e.code {
+//                case .badURL:
+//                    code = .invalidRequest
+////                case .unsupportedURL
+//                default:
+//                    code = .unknown
+//                }
+//
+//                let httpResult: HTTPResult = .failure(HTTPError(code: code, request: request, response: httpResponse, underlyingError: e))
+//                completion(httpResult)
+//            } else if let someError = error {
+//                // an error, but not a URL error
+//                let httpResult: HTTPResult = .failure(HTTPError(code: .unknown, request: request, response: httpResponse, underlyingError: someError))
+//                completion(httpResult)
+//            } else if let r = httpResponse {
+//                // not an error, and an HTTPURLResponse
+//                let httpResult: HTTPResult = .success(r)
+//                completion(httpResult)
+//            } else {
+//                // not an error, but also not an HTTPURLResponse
+//                let httpResult: HTTPResult = .failure(HTTPError(code: .invalidResponse, request: request, response: nil, underlyingError: error))
+//                completion(httpResult)
+//            }
+//        }
+//
+//        // off we go!
+//        dataTask.resume()
+//    }
+//}
+//
+//////public class StarWarsAPI {
+//////    private let loader: HTTPLoading = URLSession.shared
+//////
+//////    public func requestPeople(completion: @escaping ((HTTPResult) -> Void)) {
+//////        var r = HTTPRequest()
+//////        r.host = "swapi.dev"
+//////        r.path = "/api/people"
+//////
+//////        loader.load(request: r) { result in
+//////            completion(result)
+//////        }
+//////    }
+//////}
+////
+////
+////
+////
+////
+////
+////
+
+precedencegroup LoaderChainingPrecedence {
+    higherThan: NilCoalescingPrecedence
+    associativity: right
+}
+
+infix operator --> : LoaderChainingPrecedence
+
+@discardableResult
+public func --> (lhs: HTTPLoader?, rhs: HTTPLoader?) -> HTTPLoader? {
+    lhs?.nextLoader = rhs
+    return lhs ?? rhs
+}
 
