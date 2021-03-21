@@ -122,7 +122,42 @@ public struct FormBody: HTTPBody {
     }
 }
 
+public protocol HTTPRequestOption {
+    associatedtype Value
+    /// The value to use if a request does not provide a customized value
+    static var defaultOptionValue: Value { get }
+}
+
+extension HTTPRequest {
+    public var serverEnvironment: ServerEnvironment? {
+        get { self[option: ServerEnvironment.self] }
+        set { self[option: ServerEnvironment.self] = newValue }
+    }
+}
+
 public struct HTTPRequest {
+
+    private var options = [ObjectIdentifier: Any]()
+
+    public subscript<O: HTTPRequestOption>(option type: O.Type) -> O.Value {
+            get {
+                // create the unique identifier for this type as our lookup key
+                let id = ObjectIdentifier(type)
+
+                // pull out any specified value from the options dictionary, if it's the right type
+                // if it's missing or the wrong type, return the defaultOptionValue
+                guard let value = options[id] as? O.Value else { return type.defaultOptionValue }
+
+                // return the value from the options dictionary
+                return value
+            }
+            set {
+                let id = ObjectIdentifier(type)
+                // save the specified value into the options dictionary
+                options[id] = newValue
+            }
+        }
+
     private var urlComponents = URLComponents()
     public var method: HTTPMethod = .get // the struct we previously defined
     public var headers: [String: String] = [:]
@@ -197,6 +232,7 @@ public struct HTTPError: Error {
         case unknown            // we have no idea what the problem is
         case wrongUrl
         case bodyEncodeError
+        case resetInProgress
     }
 }
 
@@ -242,7 +278,66 @@ open class HTTPLoader {
         }
 
     }
+
+    open func reset(with group: DispatchGroup) {
+        nextLoader?.reset(with: group)
+    }
 }
+
+extension HTTPLoader {
+    public final func reset(on queue: DispatchQueue = .main, completionHandler: @escaping () -> Void) {
+            let group = DispatchGroup()
+            self.reset(with: group)
+            group.notify(queue: queue, execute: completionHandler)
+        }
+}
+
+/// The basic idea of this loader is that it stops people from resetting a loader chain while another reset call is already happening.
+public class ResetGuard: HTTPLoader {
+
+    private let threadSafeCountQueue = DispatchQueue(label: "resetGuard")
+
+    private var _isResetting = false
+
+    private var isResetting: Bool {
+        get {
+            return threadSafeCountQueue.sync {
+                return _isResetting
+            }
+        }
+
+        set {
+            return threadSafeCountQueue.sync {
+                _isResetting = newValue
+            }
+        }
+    }
+
+    public override func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        // TODO: make this thread-safe
+        if isResetting == false {
+            super.load(request: request, completion: completion)
+        } else {
+            let error = HTTPError(code: .resetInProgress, request: request, response: nil, underlyingError: nil)
+            completion(.failure(error))
+        }
+    }
+
+    public override func reset(with group: DispatchGroup) {
+        // TODO: make this thread-safe
+
+        if isResetting == true { return }
+        guard let next = nextLoader else { return }
+
+        group.enter()
+        isResetting = true
+        next.reset {
+            self.isResetting = false
+            group.leave()
+        }
+    }
+}
+
 
 public class PrintLoader: HTTPLoader {
     public override func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
@@ -395,7 +490,10 @@ public class URLSessionLoader: HTTPLoader {
     }
 }
 
-public struct ServerEnvironment {
+public struct ServerEnvironment: HTTPRequestOption {
+
+    public static let defaultOptionValue: ServerEnvironment? = nil
+
     public var host: String
     public var pathPrefix: String
     public var headers: [String: String]
@@ -417,8 +515,42 @@ extension ServerEnvironment {
     public static let qa = ServerEnvironment(host: "qa-1.example.com", pathPrefix: "/api")
     public static let staging = ServerEnvironment(host: "api-staging.example.com", pathPrefix: "/api")
     public static let production = ServerEnvironment(host: "api.example.com", pathPrefix: "/api")
-
 }
+
+public class ApplyEnvironment: HTTPLoader {
+
+    private let environment: ServerEnvironment
+
+    public init(environment: ServerEnvironment) {
+        self.environment = environment
+        super.init()
+    }
+
+    override public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        var copy = request
+
+        // use the environment specified by the request, if it's present
+        // if it doesn't have one, use the one passed to the initializer
+        let requestEnvironment = request.serverEnvironment ?? environment
+
+        if copy.host == nil {
+            copy.host = requestEnvironment.host
+        }
+
+        if copy.path.hasPrefix("/") == false {
+            // TODO: apply the environment.pathPrefix
+            copy.path = environment.pathPrefix
+        }
+        // TODO: apply the query items from the environment
+        for (header, value) in environment.headers {
+            // TODO: add these header values to the request
+            copy.headers[header] = value
+        }
+
+        super.load(request: copy, completion: completion)
+    }
+}
+
 
 precedencegroup LoaderChainingPrecedence {
     higherThan: NilCoalescingPrecedence
