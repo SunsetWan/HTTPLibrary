@@ -137,26 +137,28 @@ extension HTTPRequest {
 
 public struct HTTPRequest {
 
+    let id: UUID
+
     private var options = [ObjectIdentifier: Any]()
 
     public subscript<O: HTTPRequestOption>(option type: O.Type) -> O.Value {
-            get {
-                // create the unique identifier for this type as our lookup key
-                let id = ObjectIdentifier(type)
+        get {
+            // create the unique identifier for this type as our lookup key
+            let id = ObjectIdentifier(type)
 
-                // pull out any specified value from the options dictionary, if it's the right type
-                // if it's missing or the wrong type, return the defaultOptionValue
-                guard let value = options[id] as? O.Value else { return type.defaultOptionValue }
+            // pull out any specified value from the options dictionary, if it's the right type
+            // if it's missing or the wrong type, return the defaultOptionValue
+            guard let value = options[id] as? O.Value else { return type.defaultOptionValue }
 
-                // return the value from the options dictionary
-                return value
-            }
-            set {
-                let id = ObjectIdentifier(type)
-                // save the specified value into the options dictionary
-                options[id] = newValue
-            }
+            // return the value from the options dictionary
+            return value
         }
+        set {
+            let id = ObjectIdentifier(type)
+            // save the specified value into the options dictionary
+            options[id] = newValue
+        }
+    }
 
     private var urlComponents = URLComponents()
     public var method: HTTPMethod = .get // the struct we previously defined
@@ -169,6 +171,7 @@ public struct HTTPRequest {
 
     public init() {
         urlComponents.scheme = "https"
+        id = UUID()
     }
 }
 
@@ -268,15 +271,23 @@ open class HTTPLoader {
 
     public init() { }
 
-    open func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+    //    open func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+    //
+    //        if let next = nextLoader {
+    //            next.load(request: request, completion: completion)
+    //        } else {
+    //            let error = HTTPError(code: .cannotConnect, request: request, response: nil, underlyingError: nil)
+    //            completion(.failure(error))
+    //        }
+    //
+    //    }
 
+    open func load(task: HTTPTask) {
         if let next = nextLoader {
-            next.load(request: request, completion: completion)
-        } else {
-            let error = HTTPError(code: .cannotConnect, request: request, response: nil, underlyingError: nil)
-            completion(.failure(error))
-        }
 
+        } else {
+
+        }
     }
 
     open func reset(with group: DispatchGroup) {
@@ -286,10 +297,10 @@ open class HTTPLoader {
 
 extension HTTPLoader {
     public final func reset(on queue: DispatchQueue = .main, completionHandler: @escaping () -> Void) {
-            let group = DispatchGroup()
-            self.reset(with: group)
-            group.notify(queue: queue, execute: completionHandler)
-        }
+        let group = DispatchGroup()
+        self.reset(with: group)
+        group.notify(queue: queue, execute: completionHandler)
+    }
 }
 
 /// The basic idea of this loader is that it stops people from resetting a loader chain while another reset call is already happening.
@@ -313,7 +324,7 @@ public class ResetGuard: HTTPLoader {
         }
     }
 
-    public override func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+    public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
         // TODO: make this thread-safe
         if isResetting == false {
             super.load(request: request, completion: completion)
@@ -325,7 +336,6 @@ public class ResetGuard: HTTPLoader {
 
     public override func reset(with group: DispatchGroup) {
         // TODO: make this thread-safe
-
         if isResetting == true { return }
         guard let next = nextLoader else { return }
 
@@ -391,8 +401,8 @@ public class StarWarsAPI {
     public func requestPeople(completion: @escaping (HTTPResult) -> Void) {
         var r = HTTPRequest()
         r.path = "people"
-//        r.host = "swapi.dev"
-//        r.path = "/api/people"
+        //        r.host = "swapi.dev"
+        //        r.path = "/api/people"
 
         loader.load(request: r) { result in
             // TODO: interpret the result
@@ -548,6 +558,54 @@ public class ApplyEnvironment: HTTPLoader {
         }
 
         super.load(request: copy, completion: completion)
+    }
+}
+
+// Add cancel ability （learn from URLSession）
+public class HTTPTask {
+    public var id: UUID { request.id }
+    private var request: HTTPRequest
+    private let completion: (HTTPResult) -> Void
+
+    private var cancellationHandlers = Array<() -> Void>()
+
+    public func addCancellationHandler(_ handler: @escaping () -> Void) {
+        // TODO: make this thread-safe
+        // TODO: what if this was already cancelled?
+        // TODO: what if this is already finished but was not cancelled before finishing?
+        cancellationHandlers.append(handler)
+    }
+
+    public init(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) {
+        self.request = request
+        self.completion = completion
+    }
+
+    public func cancel() {
+        // TODO: toggle some state to indicate that "isCancelled == true"
+        // TODO: make this thread-safe
+        let handlers = cancellationHandlers
+        cancellationHandlers = []
+
+        // invoke each handler in reverse order
+        handlers.reversed().forEach { $0() }
+    }
+
+    public func complete(with result: HTTPResult) {
+        completion(result)
+    }
+
+    public func fail(_ error: HTTPError) {
+        complete(with: .failure(error))
+    }
+}
+
+extension HTTPLoader {
+    @discardableResult
+    public func load(request: HTTPRequest, completion: @escaping (HTTPResult) -> Void) -> HTTPTask {
+        let task = HTTPTask(request: request, completion: completion)
+        load(task: task)
+        return task
     }
 }
 
